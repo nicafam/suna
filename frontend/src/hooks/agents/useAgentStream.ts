@@ -538,32 +538,14 @@ export function useAgentStream(
       }
 
       const lower = errorMessage.toLowerCase();
-      const isNetworkError =
-        lower.includes('load failed') ||
-        lower.includes('failed to fetch') ||
-        lower.includes('networkerror') ||
-        lower.includes('network error') ||
-        lower.includes('timeout');
-
-      if (isNetworkError) {
-        errorMessage =
-          'Connection to the agent was lost. Please check your network and try again.';
-      }
-
       const isExpected =
-        lower.includes('not found') ||
-        lower.includes('not running') ||
-        isNetworkError;
+        lower.includes('not found') || lower.includes('not running');
 
       if (!isExpected) {
         console.error('[useAgentStream] Streaming error:', errorMessage, err);
         setError(errorMessage);
         // Show error toast with longer duration
         toast.error(errorMessage, { duration: 15000 });
-      } else if (isNetworkError) {
-        console.warn('[useAgentStream] Streaming network issue:', err);
-        setError(errorMessage);
-        toast.warning(errorMessage, { duration: 12000 });
       }
 
       const runId = currentRunIdRef.current;
