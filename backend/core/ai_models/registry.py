@@ -1,12 +1,80 @@
+import os
 from typing import Dict, List, Optional, Set
+
+import requests
+
 from .ai_models import Model, ModelProvider, ModelCapability, ModelPricing, ModelConfig
 from core.utils.config import config, EnvMode
+from core.utils.logger import logger
+
+
+def _str_to_bool(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    return value.lower() in {"1", "true", "t", "yes", "y", "on"}
+
+
+def _discover_lmstudio_model_id(api_base: str, api_key: Optional[str]) -> Optional[str]:
+    """Query LM Studio for the currently loaded model id."""
+    if not api_base:
+        return None
+
+    url = api_base.rstrip("/") + "/models"
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        response.raise_for_status()
+        payload = response.json()
+        models = payload.get("data") or []
+        if not models:
+            logger.warning("[LMStudio] /models endpoint returned no loaded models")
+            return None
+
+        # Prefer model marked as ready/loaded, otherwise fall back to the first entry
+        active_model = next(
+            (m for m in models if m.get("ready") or m.get("status") == "ready"),
+            models[0],
+        )
+        model_id = active_model.get("id") or active_model.get("model") or active_model.get("name")
+        if model_id:
+            logger.info(f"[LMStudio] Auto-discovered active model '{model_id}'")
+            return str(model_id)
+
+        logger.warning("[LMStudio] Could not determine model id from /models payload")
+    except Exception as error:  # pylint: disable=broad-except
+        logger.warning(f"[LMStudio] Failed to auto-discover model id: {error}")
+    return None
+
+# backend/core/ai_models/registry.py:5-16
+lmstudio_id = getattr(config, "LMSTUDIO_MODEL_ID", None)
+lmstudio_base = getattr(config, "LMSTUDIO_API_BASE", None)
+lmstudio_api_key = getattr(config, "LMSTUDIO_API_KEY", None)
+lmstudio_dynamic = _str_to_bool(os.getenv("LMSTUDIO_DYNAMIC_MODEL"))
+
+if config.ENV_MODE == EnvMode.LOCAL and lmstudio_dynamic and lmstudio_base:
+    discovered_model = _discover_lmstudio_model_id(lmstudio_base, lmstudio_api_key)
+    if discovered_model:
+        lmstudio_id = discovered_model
+
+lmstudio_enabled = (
+    config.ENV_MODE == EnvMode.LOCAL
+    and lmstudio_id
+    and lmstudio_base
+)
+LMSTUDIO_MODEL_FULL_ID = (
+    f"openai-compatible/{lmstudio_id}" if lmstudio_enabled else None
+)
 
 # SHOULD_USE_ANTHROPIC = False
 # CRITICAL: Production and Staging must ALWAYS use Bedrock, never Anthropic API directly
 SHOULD_USE_ANTHROPIC = config.ENV_MODE == EnvMode.LOCAL and bool(config.ANTHROPIC_API_KEY)
 
-if SHOULD_USE_ANTHROPIC:
+if lmstudio_enabled:
+    FREE_MODEL_ID = PREMIUM_MODEL_ID = LMSTUDIO_MODEL_FULL_ID
+elif SHOULD_USE_ANTHROPIC:
     FREE_MODEL_ID = "anthropic/claude-haiku-4-5"
     PREMIUM_MODEL_ID = "anthropic/claude-haiku-4-5"
 else:  
@@ -22,6 +90,30 @@ class ModelRegistry:
         self._initialize_models()
     
     def _initialize_models(self):
+        if lmstudio_enabled:
+            self.register(Model(
+                id=LMSTUDIO_MODEL_FULL_ID,
+                name=lmstudio_id,
+                provider=ModelProvider.OPENAI,
+                aliases=[
+                    lmstudio_id,
+                    "openai-compatible/" + lmstudio_id,
+                    "lmstudio-local",
+                ],
+                context_window=16_000,
+                pricing=ModelPricing(0.0, 0.0),
+                tier_availability=["free", "paid"],
+                priority=10_000,
+                recommended=True,
+                enabled=True,
+                config=ModelConfig(
+                    api_base=lmstudio_base,
+                    base_url=lmstudio_base,
+                    timeout=120,
+                    num_retries=0,
+                ),
+            ))
+
         self.register(Model(
             id="anthropic/claude-haiku-4-5" if SHOULD_USE_ANTHROPIC else "bedrock/converse/arn:aws:bedrock:us-west-2:935064898258:application-inference-profile/heol2zyy5v48",
             name="Haiku 4.5",
@@ -390,7 +482,6 @@ class ModelRegistry:
         paid_models = [m.id for m in self.get_by_tier("paid")]
         
         # Debug logging
-        from core.utils.logger import logger
         logger.debug(f"Legacy format generation: {len(free_models)} free models, {len(paid_models)} paid models")
         logger.debug(f"Free models: {free_models}")
         logger.debug(f"Paid models: {paid_models}")

@@ -216,12 +216,26 @@ export const getAgentStatus = async (agentRunId: string): Promise<AgentRun> => {
       if (response.error.status === 404) {
         nonRunningAgentRuns.add(agentRunId);
       }
+
+      const status =
+        response.error.status ?? response.error.code ?? 'agent_status_unavailable';
+      const message =
+        response.error.message || 'Unable to get agent status (network error)';
+      const statusSuffix =
+        typeof status === 'number' || status ? ` (${status})` : '';
+
+      const normalizedError = Object.assign(
+        new Error(`Error getting agent status: ${message}${statusSuffix}`),
+        {
+          status: response.error.status,
+          code: response.error.code ?? 'AGENT_STATUS_UNAVAILABLE',
+        },
+      );
+
       console.error(
-        `[API] Error getting agent status: ${response.error.status} ${response.error.message}`,
+        `[API] Error getting agent status: ${status} ${message}`,
       );
-      throw new Error(
-        `Error getting agent status: ${response.error.message} (${response.error.status})`,
-      );
+      throw normalizedError;
     }
 
     const data = response.data!;
@@ -231,9 +245,29 @@ export const getAgentStatus = async (agentRunId: string): Promise<AgentRun> => {
 
     return data;
   } catch (error) {
-    console.error('[API] Failed to get agent status:', error);
-    handleApiError(error, { operation: 'get agent status', resource: 'AI assistant status', silent: true });
-    throw error;
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const lowerMessage = rawMessage.toLowerCase();
+    const isNetworkError =
+      lowerMessage.includes('load failed') ||
+      lowerMessage.includes('failed to fetch') ||
+      lowerMessage.includes('networkerror') ||
+      lowerMessage.includes('network error') ||
+      lowerMessage.includes('timeout');
+
+    const normalizedError = isNetworkError
+      ? Object.assign(
+          new Error(
+            'Network error while getting agent status. Please check your connection and try again.',
+          ),
+          { code: 'NETWORK_ERROR', cause: error },
+        )
+      : error instanceof Error
+        ? error
+        : new Error(rawMessage);
+
+    console.error('[API] Failed to get agent status:', normalizedError);
+    handleApiError(normalizedError, { operation: 'get agent status', resource: 'AI assistant status', silent: true });
+    throw normalizedError;
   }
 };
 
@@ -500,4 +534,3 @@ export const streamAgent = (
     return () => {};
   }
 };
-

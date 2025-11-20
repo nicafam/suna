@@ -1001,10 +1001,17 @@ async def stream_agent_run(
 
             listener_task = asyncio.create_task(listen_messages())
 
+            KEEPALIVE_SECONDS = 15
+
             # 4. Main loop to process messages from the queue
             while not terminate_stream:
                 try:
-                    queue_item = await message_queue.get()
+                    try:
+                        queue_item = await asyncio.wait_for(message_queue.get(), timeout=KEEPALIVE_SECONDS)
+                    except asyncio.TimeoutError:
+                        # Send heartbeat to keep SSE connection alive during long-running prompt processing
+                        yield 'data: {"type": "ping"}\n\n'
+                        continue
 
                     if queue_item["type"] == "new_response":
                         # Fetch new responses from Redis list starting after the last processed index

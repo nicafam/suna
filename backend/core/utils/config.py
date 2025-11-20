@@ -297,6 +297,12 @@ class Configuration:
     # LLM API keys
     ANTHROPIC_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
+    # backend/core/utils/config.py:299
+    OPENAI_COMPATIBLE_API_KEY: Optional[str] = None
+    OPENAI_COMPATIBLE_API_BASE: Optional[str] = None
+    LMSTUDIO_API_KEY: Optional[str] = None
+    LMSTUDIO_API_BASE: Optional[str] = None
+    LMSTUDIO_MODEL_ID: Optional[str] = None
     GROQ_API_KEY: Optional[str] = None
     OPENROUTER_API_KEY: Optional[str] = None
     XAI_API_KEY: Optional[str] = None
