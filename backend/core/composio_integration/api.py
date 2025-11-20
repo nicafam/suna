@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
 from uuid import uuid4
+from pathlib import Path
 from core.utils.auth_utils import verify_and_get_user_id_from_jwt, get_optional_current_user_id_from_jwt
 from core.utils.logger import logger
 from core.utils.config import config, EnvMode
@@ -29,6 +30,36 @@ from core.triggers.trigger_service import get_trigger_service, TriggerEvent, Tri
 from core.triggers.execution_service import get_execution_service
 from .client import ComposioClient
 from core.triggers.api import sync_triggers_to_version_config
+
+# Local fallback icon support for toolkits (e.g., Notion, Slack, GoogleDrive)
+LOCAL_ICON_PREFIX = os.getenv("COMPOSIO_ICON_PATH_PREFIX", "/static/composio")
+LOCAL_ICON_DIR = Path(__file__).parent / "assets_self-hosted"
+
+
+def _normalize_icon_slug(slug: str) -> str:
+    normalized = slug.lower().replace(" ", "-")
+
+    aliases = {
+        "google-drive": "googledrive",
+        "google_drive": "googledrive",
+        "google": "googledrive",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _build_local_icon_url(slug: str) -> Optional[str]:
+    """Return a local icon URL if the asset exists."""
+    normalized = _normalize_icon_slug(slug)
+    path = LOCAL_ICON_DIR / f"{normalized}.svg"
+    if path.exists():
+        # Serve through API to avoid direct static mounting requirements
+        return f"/api/composio/toolkits/{slug}/local-icon"
+    # Also try alias filename with original normalized name if different
+    if normalized != slug:
+        alias_path = LOCAL_ICON_DIR / f"{slug.lower().replace(' ', '-')}.svg"
+        if alias_path.exists():
+            return f"/api/composio/toolkits/{slug}/local-icon"
+    return None
 
 router = APIRouter(prefix="/composio", tags=["composio"])
 
@@ -562,27 +593,45 @@ async def get_toolkit_icon(
     toolkit_slug: str,
     current_user_id: Optional[str] = Depends(get_optional_current_user_id_from_jwt)
 ):
+    icon_url: Optional[str] = None
+
     try:
         toolkit_service = ToolkitService()
         icon_url = await toolkit_service.get_toolkit_icon(toolkit_slug)
-        
-        if icon_url:
-            return {
-                "success": True,
-                "toolkit_slug": toolkit_slug,
-                "icon_url": icon_url
-            }
-        else:
-            return {
-                "success": False,
-                "toolkit_slug": toolkit_slug,
-                "icon_url": None,
-                "message": "Icon not found"
-            }
-    
     except Exception as e:
-        logger.error(f"Error getting toolkit icon: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        # Downgrade Composio failures to warnings and keep going with fallback
+        logger.warning(f"Error getting toolkit icon from Composio for {toolkit_slug}: {e}")
+
+    if not icon_url:
+        # Fallback to a static path that can be populated manually (e.g., Notion, Slack, GoogleDrive)
+        icon_url = _build_local_icon_url(toolkit_slug)
+
+    if not icon_url:
+        # Last resort: deterministic path even if file absent, to avoid 500s
+        normalized = _normalize_icon_slug(toolkit_slug)
+        icon_url = f"{LOCAL_ICON_PREFIX}/{normalized}.svg"
+
+    # Always return 200 with best-effort icon_url to avoid noisy 500s in the UI
+    return {
+        "success": True,
+        "toolkit_slug": toolkit_slug,
+        "icon_url": icon_url
+    }
+
+
+@router.get("/toolkits/{toolkit_slug}/local-icon")
+async def get_local_toolkit_icon(toolkit_slug: str):
+    normalized = _normalize_icon_slug(toolkit_slug)
+    candidates = [
+        LOCAL_ICON_DIR / f"{normalized}.svg",
+        LOCAL_ICON_DIR / f"{toolkit_slug.lower().replace(' ', '-')}.svg",
+    ]
+
+    for path in candidates:
+        if path.exists():
+            return FileResponse(path, media_type="image/svg+xml")
+
+    raise HTTPException(status_code=404, detail="Icon not found")
 
 
 @router.post("/tools/list")
