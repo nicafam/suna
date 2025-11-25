@@ -728,9 +728,25 @@ class AgentRunner:
                     break
 
             temporary_message = None
-            # Don't set max_tokens by default - let LiteLLM and providers handle their own defaults
-            max_tokens = None
-            logger.debug(f"max_tokens: {max_tokens} (using provider defaults)")
+        #    # Don't set max_tokens by default - let LiteLLM and providers handle their own defaults
+        #    max_tokens = None
+        #    logger.debug(f"max_tokens: {max_tokens} (using provider defaults)")
+            context_window = model_manager.get_context_window(self.config.model_name, default=31000)
+
+            if context_window >= 1_000_000:
+                max_tokens = 300_000
+            elif context_window >= 400_000:
+                max_tokens = 64_000
+            elif context_window >= 200_000:
+                max_tokens = 32_000
+            elif context_window >= 100_000:
+                max_tokens = 16_000
+            else:
+                max_tokens = min(4096, int(context_window * 0.25))
+
+            logger.debug(f"max_tokens: {max_tokens} (derived from context_window={context_window})")
+
+
             generation = self.config.trace.generation(name="thread_manager.run_thread") if self.config.trace else None
             try:
                 logger.debug(f"Starting thread execution for {self.config.thread_id}")

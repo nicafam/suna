@@ -1,4 +1,8 @@
 .DS_Store
+.secrets
+
+# ignore 3rd-party components
+3rd-party/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
